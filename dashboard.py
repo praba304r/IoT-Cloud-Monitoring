@@ -1,17 +1,26 @@
-
 import os
 
 import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+import csv
 from dotenv import load_dotenv
+from streamlit_autorefresh import st_autorefresh
 
+# Load environment variables
 load_dotenv()
+
+# Shared control file used by app.py and dashboard.py
+CONTROL_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "monitoring_control.txt",
+)
 
 CHANNEL_ID = os.getenv("THINGSPEAK_CHANNEL_ID")
 READ_API_KEY = os.getenv("THINGSPEAK_READ_API_KEY", "").strip()
 
+# Configure dashboard
 st.set_page_config(
     page_title="IoT Cloud Monitoring",
     page_icon="🌡️",
@@ -21,21 +30,79 @@ st.set_page_config(
 st.title("🌡️ IoT Cloud Monitoring Dashboard")
 st.write("Real-Time Temperature and Humidity Monitoring")
 
-if not CHANNEL_ID:
-    st.error("Channel ID is missing. Check your .env file.")
-    st.stop()
+
+# Read monitoring status
+def get_monitoring_status():
+    if not os.path.exists(CONTROL_FILE):
+        return "running"
+
+    try:
+        with open(CONTROL_FILE, "r") as file:
+            status = file.read().strip().lower()
+
+        return status if status in ["running", "stopped"] else "running"
+
+    except OSError:
+        return "running"
+
+
+# Update monitoring status
+def set_monitoring_status(status):
+    with open(CONTROL_FILE, "w") as file:
+        file.write(status)
+
+
+# Sidebar settings
+st.sidebar.header("Monitoring Controls")
+
+status = get_monitoring_status()
+
+if status == "running":
+    st.sidebar.success("Monitoring Status: RUNNING")
+else:
+    st.sidebar.warning("Monitoring Status: STOPPED")
+
+col_start, col_stop = st.sidebar.columns(2)
+
+with col_start:
+    if st.button("▶ Start", use_container_width=True):
+        set_monitoring_status("running")
+        st.rerun()
+
+with col_stop:
+    if st.button("⏹ Stop", use_container_width=True):
+        set_monitoring_status("stopped")
+        st.rerun()
+
+st.sidebar.divider()
 
 st.sidebar.header("Dashboard Settings")
+
 refresh_seconds = st.sidebar.selectbox(
-    "Refresh interval",
+    "Automatic Refresh Interval",
     [15, 30, 60],
     index=1,
 )
 
+# Automatically refresh dashboard
+st_autorefresh(
+    interval=refresh_seconds * 1000,
+    limit=None,
+    key="iot_dashboard_refresh",
+)
+
 if st.sidebar.button("Refresh Now"):
+    st.cache_data.clear()
     st.rerun()
 
 
+# Check ThingSpeak channel
+if not CHANNEL_ID:
+    st.error("Channel ID is missing. Check your .env file.")
+    st.stop()
+
+
+# Fetch cloud readings
 @st.cache_data(ttl=15)
 def fetch_data(channel_id, read_api_key):
     url = (
@@ -89,6 +156,7 @@ def fetch_data(channel_id, read_api_key):
     return df
 
 
+# Retrieve data
 try:
     with st.spinner("Loading sensor data from ThingSpeak..."):
         df = fetch_data(CHANNEL_ID, READ_API_KEY)
@@ -101,6 +169,8 @@ except ValueError:
     st.error("ThingSpeak returned invalid data.")
     st.stop()
 
+
+# Display readings
 if df.empty:
     st.warning(
         "No sensor readings are available yet. "
@@ -127,6 +197,8 @@ col3.metric(
     len(df),
 )
 
+
+# Temperature chart
 st.subheader("📈 Temperature History")
 
 temperature_chart = px.line(
@@ -142,6 +214,8 @@ st.plotly_chart(
     use_container_width=True,
 )
 
+
+# Humidity chart
 st.subheader("💧 Humidity History")
 
 humidity_chart = px.line(
@@ -157,6 +231,8 @@ st.plotly_chart(
     use_container_width=True,
 )
 
+
+# Recent readings
 st.subheader("📋 Recent Sensor Readings")
 
 st.dataframe(
@@ -166,16 +242,67 @@ st.dataframe(
     use_container_width=True,
 )
 
+# Dashboard information
 st.caption(
     f"Data source: ThingSpeak Channel {CHANNEL_ID}"
 )
 
 st.info(
-    f"This dashboard refreshes every {refresh_seconds} seconds. "
-    "Refresh the browser to fetch the latest readings."
+    f"Dashboard automatically refreshes every "
+    f"{refresh_seconds} seconds."
 )
 
 st.caption(
-    "Note: The displayed measurements are simulated until "
-    "physical sensors are connected."
+    "Note: The displayed measurements are simulated "
+    "until physical sensors are connected."
 )
+# ==========================================
+# ALERT HISTORY
+# ==========================================
+
+ALERT_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "alert_history.csv",
+)
+
+st.divider()
+
+st.header("🚨 Alert History")
+
+if os.path.exists(ALERT_FILE):
+
+    try:
+        alert_df = pd.read_csv(ALERT_FILE)
+
+        if not alert_df.empty:
+            st.metric("Total Alerts", len(alert_df))
+
+            st.dataframe(
+                alert_df.sort_values(
+                    "Timestamp",
+                    ascending=False,
+                ),
+                use_container_width=True,
+            )
+
+            csv_data = alert_df.to_csv(index=False).encode("utf-8")
+
+            st.download_button(
+                label="📥 Download Alert History",
+                data=csv_data,
+                file_name="alert_history.csv",
+                mime="text/csv",
+            )
+
+        else:
+            st.info("No alerts recorded yet.")
+
+    except (OSError, pd.errors.ParserError) as error:
+        st.error(f"Unable to read alert history: {error}")
+
+else:
+    st.info(
+        "No alert history available yet. "
+        "Alerts will appear here when temperature exceeds 35°C "
+        "or humidity exceeds 80%."
+    )

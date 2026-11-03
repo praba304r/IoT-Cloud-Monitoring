@@ -1,6 +1,7 @@
 import os
 import random
 import time
+import csv
 import smtplib
 from datetime import datetime
 from email.message import EmailMessage
@@ -27,7 +28,30 @@ UPLOAD_INTERVAL = 20  # Seconds
 EMAIL_COOLDOWN = 600  # 10 minutes
 
 last_email_time = 0
+ALERT_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "alert_history.csv"
+)
+CONTROL_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "monitoring_control.txt",
+)
 
+
+def is_monitoring_enabled():
+    """Check whether monitoring is enabled from the dashboard."""
+
+    if not os.path.exists(CONTROL_FILE):
+        return True
+
+    try:
+        with open(CONTROL_FILE, "r") as file:
+            status = file.read().strip().lower()
+
+        return status != "stopped"
+
+    except OSError:
+        return True
 
 def generate_sensor_data():
     """Generate simulated temperature and humidity readings."""
@@ -122,8 +146,34 @@ This is an automatic notification from your IoT monitoring system.
 
     except Exception as error:
         print(f"Email alert error: {error}")
+def save_alert_history(temperature, humidity, alerts):
+    """Save detected alerts into a CSV file."""
 
+    file_exists = os.path.exists(ALERT_FILE)
 
+    try:
+        with open(ALERT_FILE, "a", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+
+            if not file_exists:
+                writer.writerow([
+                    "Timestamp",
+                    "Temperature",
+                    "Humidity",
+                    "Alert Details"
+                ])
+
+            writer.writerow([
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                temperature,
+                humidity,
+                " | ".join(alerts)
+            ])
+
+        print("Alert history saved successfully.")
+
+    except OSError as error:
+        print(f"Unable to save alert history: {error}")
 def check_alerts(temperature, humidity):
     """Check sensor readings and send email alerts when necessary."""
 
@@ -146,10 +196,10 @@ def check_alerts(temperature, humidity):
         alerts.append(alert)
 
     if alerts:
+        save_alert_history(temperature, humidity, alerts)
         send_email_alert(temperature, humidity, alerts)
     else:
         print("Status: Normal. No alerts detected.")
-
 
 def main():
     if not CHANNEL_ID or not WRITE_API_KEY:
@@ -167,6 +217,13 @@ def main():
 
     try:
         while True:
+
+            # Check dashboard Start/Stop control
+            if not is_monitoring_enabled():
+                print("Monitoring PAUSED. Waiting for Start command...")
+                time.sleep(1)
+                continue
+
             temperature, humidity = generate_sensor_data()
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -180,7 +237,14 @@ def main():
             upload_to_thingspeak(temperature, humidity)
 
             print(f"Next reading in {UPLOAD_INTERVAL} seconds.")
-            time.sleep(UPLOAD_INTERVAL)
+
+            # Check Stop command every second
+            for _ in range(UPLOAD_INTERVAL):
+                if not is_monitoring_enabled():
+                    print("Monitoring paused.")
+                    break
+
+                time.sleep(1)
 
     except KeyboardInterrupt:
         print("\nMonitoring stopped by user.")
