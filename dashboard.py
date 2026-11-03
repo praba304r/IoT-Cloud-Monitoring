@@ -5,6 +5,7 @@ import plotly.express as px
 import requests
 import streamlit as st
 import csv
+import json
 from dotenv import load_dotenv
 from streamlit_autorefresh import st_autorefresh
 
@@ -15,6 +16,10 @@ load_dotenv()
 CONTROL_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "monitoring_control.txt",
+)
+THRESHOLD_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "threshold_settings.json",
 )
 
 CHANNEL_ID = os.getenv("THINGSPEAK_CHANNEL_ID")
@@ -83,6 +88,72 @@ refresh_seconds = st.sidebar.selectbox(
     [15, 30, 60],
     index=1,
 )
+
+# ==========================================
+# ALERT THRESHOLD SETTINGS
+# ==========================================
+
+st.sidebar.divider()
+st.sidebar.header("🚨 Alert Threshold Settings")
+
+# Default threshold values
+temperature_limit = 35.0
+humidity_limit = 80.0
+
+# Load previously saved threshold settings
+if os.path.exists(THRESHOLD_FILE):
+    try:
+        with open(THRESHOLD_FILE, "r", encoding="utf-8") as file:
+            settings = json.load(file)
+
+        temperature_limit = float(
+            settings.get("temperature_limit", 35.0)
+        )
+        humidity_limit = float(
+            settings.get("humidity_limit", 80.0)
+        )
+
+        if temperature_limit <= 0 or not 0 < humidity_limit <= 100:
+            raise ValueError("Invalid threshold values")
+
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        st.sidebar.warning("Unable to load saved thresholds. Using defaults.")
+
+# User-adjustable settings
+new_temperature_limit = st.sidebar.number_input(
+    "Temperature Limit (°C)",
+    min_value=1.0,
+    max_value=100.0,
+    value=temperature_limit,
+    step=1.0,
+)
+
+new_humidity_limit = st.sidebar.number_input(
+    "Humidity Limit (%)",
+    min_value=1.0,
+    max_value=100.0,
+    value=humidity_limit,
+    step=1.0,
+)
+
+# Save settings
+if st.sidebar.button("💾 Save Threshold Settings", use_container_width=True):
+
+    settings = {
+        "temperature_limit": new_temperature_limit,
+        "humidity_limit": new_humidity_limit,
+    }
+
+    try:
+        with open(THRESHOLD_FILE, "w", encoding="utf-8") as file:
+            json.dump(settings, file, indent=4)
+
+        st.sidebar.success("Threshold settings saved successfully!")
+        st.rerun()
+
+    except OSError as error:
+        st.sidebar.error(f"Unable to save settings: {error}")
+
 
 # Automatically refresh dashboard
 st_autorefresh(

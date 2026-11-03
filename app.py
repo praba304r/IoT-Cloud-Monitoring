@@ -3,6 +3,7 @@ import random
 import time
 import csv
 import smtplib
+import json
 from datetime import datetime
 from email.message import EmailMessage
 
@@ -21,8 +22,35 @@ EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 THINGSPEAK_URL = "https://api.thingspeak.com/update"
 
-TEMPERATURE_LIMIT = 35.0
-HUMIDITY_LIMIT = 80.0
+DEFAULT_TEMPERATURE_LIMIT = 35.0
+DEFAULT_HUMIDITY_LIMIT = 80.0
+
+THRESHOLD_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "threshold_settings.json"
+)
+
+
+def get_thresholds():
+    """Read adjustable alert thresholds from the settings file."""
+    try:
+        with open(THRESHOLD_FILE, "r", encoding="utf-8") as file:
+            settings = json.load(file)
+
+        temperature_limit = float(
+            settings.get("temperature_limit", DEFAULT_TEMPERATURE_LIMIT)
+        )
+        humidity_limit = float(
+            settings.get("humidity_limit", DEFAULT_HUMIDITY_LIMIT)
+        )
+
+        if temperature_limit <= 0 or not 0 < humidity_limit <= 100:
+            raise ValueError("Invalid threshold values")
+
+        return temperature_limit, humidity_limit
+
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return DEFAULT_TEMPERATURE_LIMIT, DEFAULT_HUMIDITY_LIMIT
 
 UPLOAD_INTERVAL = 20  # Seconds
 EMAIL_COOLDOWN = 600  # 10 minutes
@@ -174,23 +202,26 @@ def save_alert_history(temperature, humidity, alerts):
 
     except OSError as error:
         print(f"Unable to save alert history: {error}")
+
 def check_alerts(temperature, humidity):
-    """Check sensor readings and send email alerts when necessary."""
+    """Check sensor readings using adjustable alert thresholds."""
+
+    temperature_limit, humidity_limit = get_thresholds()
 
     alerts = []
 
-    if temperature > TEMPERATURE_LIMIT:
+    if temperature > temperature_limit:
         alert = (
             f"High temperature: {temperature} °C "
-            f"exceeds {TEMPERATURE_LIMIT} °C."
+            f"exceeds {temperature_limit} °C."
         )
         print("ALERT:", alert)
         alerts.append(alert)
 
-    if humidity > HUMIDITY_LIMIT:
+    if humidity > humidity_limit:
         alert = (
             f"High humidity: {humidity}% "
-            f"exceeds {HUMIDITY_LIMIT}%."
+            f"exceeds {humidity_limit}%."
         )
         print("ALERT:", alert)
         alerts.append(alert)
@@ -200,6 +231,7 @@ def check_alerts(temperature, humidity):
         send_email_alert(temperature, humidity, alerts)
     else:
         print("Status: Normal. No alerts detected.")
+
 
 def main():
     if not CHANNEL_ID or not WRITE_API_KEY:
